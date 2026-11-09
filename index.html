@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Campus Vision — контроль занятий</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="lf" class="card login-card">
+    <div class="logo"><i></i>Campus Vision</div>
+    <p>Контроль занятий по камере</p>
+    <input type="password" id="lpw" placeholder="Пароль администратора" autocomplete="current-password">
+    <button class="btn pri">Войти</button>
+    <div id="lerr" class="err"></div>
+  </form>
+</div>
+<div id="app" class="app" hidden>
+  <nav id="nav"></nav>
+  <main><div id="view"></div><section id="camPage" hidden></section></main>
+</div>
+<div id="toasts"></div>
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js"></script>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
