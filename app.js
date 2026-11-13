@@ -13,7 +13,7 @@ async function api(p,body,method){
 const fd=d=>d?new Date(d).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';
 const fdur=s=>s>=60?Math.floor(s/60)+' мин '+Math.round(s%60)+' с':Math.round(s)+' с';
 const loc=d=>{const x=new Date(d);x.setMinutes(x.getMinutes()-x.getTimezoneOffset());return x.toISOString().slice(0,16)};
-const ST={front:['Смотрит вперёд','#15803d'],screen:['ПК / экран','#2563eb'],notebook:['Тетрадь','#7c3aed'],phone:['Телефон','#ea580c'],away:['Отвернулся','#ca8a04'],lying:['Лёжа / на парте','#dc2626'],standing:['Стоит','#0891b2'],board:['У доски','#0f766e'],late:['Опоздание','#ca8a04'],absent:['Не пришёл','#dc2626']};
+const ST={front:['Смотрит вперёд','#15803d'],screen:['ПК / экран','#2563eb'],notebook:['Тетрадь','#7c3aed'],phone:['Телефон','#ea580c'],away:['Отвернулся','#ca8a04'],lying:['Лёжа / на парте','#dc2626'],standing:['Стоит','#0891b2'],board:['У доски','#0f766e'],camera:['Смотрит в камеру','#d97706'],late:['Опоздание','#ca8a04'],absent:['Не пришёл','#dc2626']};
 const sl=s=>(ST[s]||[s])[0];
 function modal(html,wide){const m=document.createElement('div');m.className='modal';m.innerHTML=`<div class="box${wide?' wide':''}">${html}</div>`;
   m.addEventListener('mousedown',e=>{if(e.target===m)m.close()});m.close=()=>{m.onclose&&m.onclose();m.remove()};document.body.append(m);return m}
@@ -155,7 +155,7 @@ const POSE_URL='https://storage.googleapis.com/mediapipe-models/pose_landmarker/
 const OBJ_URL='https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
 const CFG=Object.assign({pitchDown:.10,yawAway:.45,hold:3,zx0:.05,zx1:.40,inputSize:416,learn:true,thr:.5},JSON.parse(localStorage.getItem('cfg')||'{}'));
 const CAM={run:false,tracks:[],tid:0,buf:[],seen:{},lost:[],lesson:null,roster:null,pick:null,pose:null,obj:null};
-let RECO=[],RMAP={},faceReady,mpReady;
+let RECO=[],RMAP={},faceReady,mpReady,ROOM={samples:[]};
 const ensureFace=()=>faceReady||(faceReady=(async()=>{for(const n of['tinyFaceDetector','faceLandmark68Net','faceRecognitionNet'])await faceapi.nets[n].loadFromUri(FA)})().catch(e=>{faceReady=null;throw e}));
 const ensureMP=()=>mpReady||(mpReady=(async()=>{
   try{const fs=await FilesetResolver.forVisionTasks(MPW);
@@ -191,7 +191,7 @@ function buildCam(){
   camPage.innerHTML=`<div class="head"><h1>Камера</h1></div><div class="camgrid">
   <div class="stage"><video id="vid" autoplay muted playsinline></video><canvas id="ov"></canvas><div class="hud" id="hud" hidden></div><div class="msg" id="camMsg">Выберите занятие справа и нажмите «Старт».<br>Камера работает прямо в браузере: видео никуда не отправляется, на сервер уходят только события.</div></div>
   <aside class="side"><div class="card"><select id="clesson"></select><select id="ccam"></select>
-    <div class="row" style="margin-top:0"><button class="btn pri big" id="cstart">Старт</button><button class="btn big" id="cstop" disabled>Пауза</button><button class="btn bad big" id="cfin" disabled>Завершить занятие</button></div></div>
+    <div class="row" style="margin-top:0"><button class="btn pri big" id="cstart">Старт</button><button class="btn big" id="cstop" disabled>Пауза</button><button class="btn bad big" id="cfin" disabled>Завершить занятие</button></div><div class="row"><button class="btn" id="ctrain">Обучить камеру и комнату</button></div></div>
   <div class="card"><h2>Сейчас в кадре <small id="unk" style="color:var(--mute);font-weight:400"></small></h2><div class="live" id="live"><p class="empty">Камера выключена</p></div></div>
   <div class="card"><h2>Список группы</h2><div class="ros" id="roster"></div></div>
   <div class="card"><details><summary>Калибровка</summary><div class="form">
@@ -203,7 +203,7 @@ function buildCam(){
    <label class="chk"><input type="checkbox" id="k_learn" ${CFG.learn?'checked':''}> Дообучать по ходу занятий</label></div></details></div></aside></div>`;
   CAM.video=$('#vid');CAM.ov=$('#ov');
   for(const k of['pitchDown','yawAway','hold','zx0','zx1','inputSize','learn'])$('#k_'+k).onchange=e=>{const el=e.target;CFG[k]=el.type==='checkbox'?el.checked:+el.value/(k.startsWith('zx')?100:1);localStorage.setItem('cfg',JSON.stringify(CFG))};
-  $('#cstart').onclick=guard(startCam);$('#cstop').onclick=guard(()=>stopCam(false));
+  $('#cstart').onclick=guard(startCam);$('#cstop').onclick=guard(()=>stopCam(false));$('#ctrain').onclick=guard(trainRoom);
   $('#cfin').onclick=guard(async()=>{if(confirm('Завершить занятие? Не пришедшие будут отмечены и получат штраф.'))await stopCam(true)});
 }
 function setRunUI(){$('#cstart').disabled=CAM.run;$('#cstop').disabled=!CAM.run;$('#cfin').disabled=!CAM.lesson;$('#clesson').disabled=CAM.run;$('#hud').hidden=!CAM.run}
@@ -222,6 +222,7 @@ async function startCam(){
   RECO=(await api('/recognition')).map(p=>({...p,desc:(p.descriptors||[]).map(a=>new Float32Array(a))}));
   if(!RECO.length)toast('Нет обученных людей с согласием — сначала раздел «Люди»',1);
   CAM.roster=await api(`/lessons/${lid}/roster`);CAM.lesson=CAM.roster.lesson;RMAP={};
+  try{ROOM=await api('/room-model?room='+encodeURIComponent(CAM.lesson.room||''))}catch{ROOM={samples:[]}}
   for(const p of CAM.roster.people)RMAP[p.id]=p;for(const p of RECO)RMAP[p.id]=Object.assign(RMAP[p.id]||{},p);
   CAM.seen={};for(const a of CAM.roster.attendance)if(a.status!=='absent')CAM.seen[a.person_id]=a;
   const dev=$('#ccam').value;
@@ -250,7 +251,7 @@ function region(e){
   if(e.pose){const p=e.pose.filter(q=>q.visibility>.3);if(p.length>3){const xs=p.map(q=>q.x),ys=p.map(q=>q.y);return{x0:Math.min(...xs)-.04,x1:Math.max(...xs)+.04,y0:Math.min(...ys)-.04,y1:Math.max(...ys)+.06}}}
   const b=e.fb;return{x0:b.x-b.w,x1:b.x+2*b.w,y0:b.y-.2*b.h,y1:b.y+4*b.h}}
 async function step(){
-  const v=CAM.video,W=v.videoWidth,H=v.videoHeight;if(!W)return;const now=Date.now(),img=frameData(v);
+  if(CAM.paused)return;const v=CAM.video,W=v.videoWidth,H=v.videoHeight;if(!W)return;const now=Date.now(),img=frameData(v);
   const faces=await faceapi.detectAllFaces(v,new faceapi.TinyFaceDetectorOptions({inputSize:CFG.inputSize,scoreThreshold:.4})).withFaceLandmarks().withFaceDescriptors();
   const poses=CAM.pose?CAM.pose.detectForVideo(v,performance.now()).landmarks:[];
   const dets=CAM.obj?CAM.obj.detectForVideo(v,performance.now()).detections:[];
@@ -264,7 +265,7 @@ async function step(){
   for(const e of ents)e.reg=region(e);
   /* 2. предметы (телефон, ноутбук, книга) -> ближайшему человеку */
   for(const d of dets){const bb=d.boundingBox,o={n:d.categories[0].categoryName,cx:(bb.originX+bb.width/2)/W,cy:(bb.originY+bb.height/2)/H};
-    let best=null,bd=9;for(const e of ents){const r=e.reg;if(o.cx>r.x0&&o.cx<r.x1&&o.cy>r.y0&&o.cy<r.y1){const dd=Math.hypot(o.cx-e.cx,o.cy-e.cy);if(dd<bd){bd=dd;best=e}}}
+    let best=null,bd=9;for(const e of ents){const r=e.reg,pad=['tv','laptop','keyboard'].includes(o.n)?.08:0;if(o.cx>r.x0-pad&&o.cx<r.x1+pad&&o.cy>r.y0-pad&&o.cy<r.y1+pad){const dd=Math.hypot(o.cx-e.cx,o.cy-e.cy);if(dd<bd){bd=dd;best=e}}}
     if(best)(best.objs||=[]).push(o)}
   /* 3. треки: кто есть кто */
   const used=new Set();
@@ -298,12 +299,37 @@ function onIdentified(t){
   const pid=t.personId;if(CAM.seen[pid])return;CAM.seen[pid]={status:'present'};
   api('/attendance/seen',{lesson_id:CAM.lesson.id,person_id:pid}).then(a=>{CAM.seen[pid]=a;toast(`${RMAP[pid]?.full_name}: ${a.status==='late'?'опоздал на '+a.late_minutes+' мин':'пришёл'}`,a.status==='late')}).catch(e=>{delete CAM.seen[pid];toast(e.message,1)})}
 
+/* ---- обученная модель взгляда (k-NN по примерам, снятым в этой комнате) ---- */
+function gazeLabel(yaw,pr,cx){
+  const S=ROOM.samples;if(S.length<15)return null;
+  const d=S.map(x=>({c:x.c,d:Math.hypot((x.y-yaw)*1.2,(x.p-pr)*2.5,(x.x-cx)*.5)})).sort((a,b)=>a.d-b.d).slice(0,7);
+  if(d[0].d>.6)return null;const v={};d.forEach(x=>v[x.c]=(v[x.c]||0)+1/(x.d+.05));
+  return Object.entries(v).sort((a,b)=>b[1]-a[1])[0][0]}
+async function trainRoom(){
+  if(!CAM.run)return toast('Сначала нажмите «Старт» и сядьте на место студента перед камерой',1);
+  const steps=[['camera','Смотрите прямо в объектив камеры'],['board','Смотрите на доску / интерактивную панель'],['screen','Смотрите на свой монитор или ноутбук'],['notebook','Опустите взгляд на тетрадь или стол'],['away','Отвернитесь в сторону']];
+  const m=modal(`<h3>Обучение камеры и комнаты</h3><p style="color:var(--mute)">Сядьте на рабочее место студента. Программа запомнит, как выглядит взгляд «в камеру», «на доску», «на монитор», «в тетрадь» и «в сторону» именно с этого места. Повторите на 2–3 разных местах (ближний ряд, дальний, у окна).</p><h2 id="tr_p" style="margin:14px 0">Образцов сейчас: ${ROOM.samples.length}</h2><div class="row"><button class="btn pri" id="tr_go">Начать (около 40 сек)</button><button class="btn bad" id="tr_clear">Стереть обучение</button></div>`);
+  const room=CAM.lesson.room||'',save=()=>api('/room-model',{room,samples:ROOM.samples},'PUT');
+  $('#tr_clear',m).onclick=guard(async()=>{if(!confirm('Стереть всё обучение этой комнаты?'))return;ROOM.samples=[];await save();$('#tr_p',m).textContent='Образцов сейчас: 0'});
+  $('#tr_go',m).onclick=guard(async()=>{
+    $('#tr_go',m).disabled=true;CAM.paused=true;const add=[];
+    try{for(const [c,txt] of steps){
+      for(let i=3;i>0&&document.body.contains(m);i--){$('#tr_p',m).textContent=`${txt} — через ${i}`;await new Promise(r=>setTimeout(r,1000))}
+      const t1=Date.now();let n=0;$('#tr_p',m).textContent=txt+' — держите взгляд';
+      while(Date.now()-t1<4500&&document.body.contains(m)){
+        const r=await faceapi.detectSingleFace(CAM.video,new faceapi.TinyFaceDetectorOptions({inputSize:CFG.inputSize,scoreThreshold:.4})).withFaceLandmarks();
+        if(r){const p=r.landmarks.positions,b=r.detection.box,eL={x:(p[36].x+p[39].x)/2,y:(p[36].y+p[39].y)/2},eR={x:(p[42].x+p[45].x)/2,y:(p[42].y+p[45].y)/2},mx=(eL.x+eR.x)/2,my=(eL.y+eR.y)/2,ed=Math.hypot(eR.x-eL.x,eR.y-eL.y)||1;
+          add.push({c,y:+((p[30].x-mx)/ed).toFixed(3),p:+((p[30].y-my)/Math.max(1,p[8].y-my)).toFixed(3),x:+((b.x+b.width/2)/CAM.video.videoWidth).toFixed(3)});n++}
+        await new Promise(r=>setTimeout(r,200))}
+      if(n<4){toast('Лицо плохо видно на шаге «'+txt+'». Повторите.',1)}}
+      ROOM.samples=[...ROOM.samples,...add].slice(-600);await save();toast('Обучено: добавлено образцов '+add.length+', всего '+ROOM.samples.length);m.close()}
+    finally{CAM.paused=false}})}
 /* ---- что делает человек: поза головы + тело + предметы ---- */
 function classify(t,e,W,H){
-  const f=e.face,lm=e.pose,o=e.objs||[];let yaw=0,delta=0;
+  const f=e.face,lm=e.pose,o=e.objs||[];let yaw=0,delta=0,pr=0,g=null;
   if(f){const p=f.landmarks.positions,eL={x:(p[36].x+p[39].x)/2,y:(p[36].y+p[39].y)/2},eR={x:(p[42].x+p[45].x)/2,y:(p[42].y+p[45].y)/2};
     const mx=(eL.x+eR.x)/2,my=(eL.y+eR.y)/2,ed=Math.hypot(eR.x-eL.x,eR.y-eL.y)||1;
-    yaw=(p[30].x-mx)/ed;delta=(p[30].y-my)/Math.max(1,p[8].y-my)-t.pb}
+    yaw=(p[30].x-mx)/ed;pr=(p[30].y-my)/Math.max(1,p[8].y-my);delta=pr-t.pb}
   const has=n=>o.some(x=>x.n===n),phone=o.find(x=>x.n==='cell phone');
   let angle=0,drop=9,rise=0,knees=false,wrist=false;
   if(lm){const L=lm[11],R=lm[12];
@@ -317,6 +343,7 @@ function classify(t,e,W,H){
   if(angle>60||drop<.1||(f&&delta>.28))s='lying';
   else if(phone&&(delta>.06||wrist||!f))s='phone';
   else if(standing)s=(t.cx>CFG.zx0&&t.cx<CFG.zx1)?'board':'standing';
+  else if(f&&(g=gazeLabel(yaw,pr,t.cx)))s=g==='board'?'front':g;
   else if(f&&Math.abs(yaw)>CFG.yawAway)s='away';
   else if(f?delta>CFG.pitchDown:drop<.45)s='notebook';
   else if(has('laptop')||has('tv'))s=(!f||delta>-.08)?'screen':'front';

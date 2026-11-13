@@ -89,6 +89,13 @@ create table if not exists point_log (
   created_at timestamptz not null default now()
 );
 
+create table if not exists room_model (
+  room text primary key,
+  samples jsonb not null default '[]',
+  updated_at timestamptz not null default now()
+);
+alter table room_model enable row level security;
+
 create index if not exists idx_att_lesson on attendance(lesson_id);
 create index if not exists idx_act_lesson on activity_log(lesson_id, person_id);
 create index if not exists idx_act_person on activity_log(person_id, started_at desc);
@@ -112,4 +119,5 @@ insert into rules (state,label,role,min_seconds,base_points,per_minute_points,ta
  ('away',    'Отвернулся от занятия',     'student',120, -1, -0.5, 'both', false, true),
  ('standing','Стоит / вышел из-за парты', 'student',120, -1,  0,   'both', false, false),
  ('board',   'Отвечает у доски',          'student', 60,  1,  0,   'both', false, true),
+ ('camera',  'Смотрит в камеру вместо занятия','student',30, -0.5,-0.5,'both', false, true),
  ('late',    'Опоздание преподавателя',   'teacher',  0,  0,  0,   'both', true,  true);

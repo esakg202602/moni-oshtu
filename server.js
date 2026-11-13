@@ -164,6 +164,16 @@ app.post('/api/activity', h(async (q, r) => {
   r.json({ saved: rows.length, violations: v });
 }));
 
+/* ---------- обученная модель взгляда комнаты ---------- */
+app.get('/api/room-model', h(async (q, r) => {
+  const d = must(await db.from('room_model').select('samples').eq('room', q.query.room || '').maybeSingle());
+  r.json({ samples: d?.samples || [] });
+}));
+app.put('/api/room-model', h(async (q, r) => {
+  must(await db.from('room_model').upsert({ room: q.body.room || '', samples: q.body.samples || [], updated_at: new Date().toISOString() }));
+  r.json({ ok: 1 });
+}));
+
 /* ---------- нарушения, баллы, правила ---------- */
 app.get('/api/violations', h(async (q, r) => r.json(must(await db.from('violations')
   .select('*,person:person_id(full_name,group_name),lesson:lesson_id(title)')
