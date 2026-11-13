@@ -300,10 +300,10 @@ function onIdentified(t){
   api('/attendance/seen',{lesson_id:CAM.lesson.id,person_id:pid}).then(a=>{CAM.seen[pid]=a;toast(`${RMAP[pid]?.full_name}: ${a.status==='late'?'опоздал на '+a.late_minutes+' мин':'пришёл'}`,a.status==='late')}).catch(e=>{delete CAM.seen[pid];toast(e.message,1)})}
 
 /* ---- обученная модель взгляда (k-NN по примерам, снятым в этой комнате) ---- */
-function gazeLabel(yaw,pr,cx){
+function gazeLabel(yaw,dl,cx){
   const S=ROOM.samples;if(S.length<15)return null;
-  const d=S.map(x=>({c:x.c,d:Math.hypot((x.y-yaw)*1.2,(x.p-pr)*2.5,(x.x-cx)*.5)})).sort((a,b)=>a.d-b.d).slice(0,7);
-  if(d[0].d>.6)return null;const v={};d.forEach(x=>v[x.c]=(v[x.c]||0)+1/(x.d+.05));
+  const d=S.map(x=>({c:x.c,w:x.w||1,d:Math.hypot((x.y-yaw)*1.2,(x.p-dl)*2.5,(x.x-cx)*.5)})).sort((a,b)=>a.d-b.d).slice(0,7);
+  if(d[0].d>.6)return null;const v={};d.forEach(x=>v[x.c]=(v[x.c]||0)+x.w/(x.d+.05));
   return Object.entries(v).sort((a,b)=>b[1]-a[1])[0][0]}
 async function trainRoom(){
   if(!CAM.run)return toast('Сначала нажмите «Старт» и сядьте на место студента перед камерой',1);
@@ -319,10 +319,15 @@ async function trainRoom(){
       while(Date.now()-t1<4500&&document.body.contains(m)){
         const r=await faceapi.detectSingleFace(CAM.video,new faceapi.TinyFaceDetectorOptions({inputSize:CFG.inputSize,scoreThreshold:.4})).withFaceLandmarks();
         if(r){const p=r.landmarks.positions,b=r.detection.box,eL={x:(p[36].x+p[39].x)/2,y:(p[36].y+p[39].y)/2},eR={x:(p[42].x+p[45].x)/2,y:(p[42].y+p[45].y)/2},mx=(eL.x+eR.x)/2,my=(eL.y+eR.y)/2,ed=Math.hypot(eR.x-eL.x,eR.y-eL.y)||1;
-          add.push({c,y:+((p[30].x-mx)/ed).toFixed(3),p:+((p[30].y-my)/Math.max(1,p[8].y-my)).toFixed(3),x:+((b.x+b.width/2)/CAM.video.videoWidth).toFixed(3)});n++}
+          add.push({c,y:+((p[30].x-mx)/ed).toFixed(3),p:(p[30].y-my)/Math.max(1,p[8].y-my),x:+((b.x+b.width/2)/CAM.video.videoWidth).toFixed(3)});n++}
         await new Promise(r=>setTimeout(r,200))}
       if(n<4){toast('Лицо плохо видно на шаге «'+txt+'». Повторите.',1)}}
-      ROOM.samples=[...ROOM.samples,...add].slice(-600);await save();toast('Обучено: добавлено образцов '+add.length+', всего '+ROOM.samples.length);m.close()}
+      const med=a=>{a=a.sort((x,y)=>x-y);return a[a.length>>1]},cs=add.filter(x=>x.c==='camera'),bs=add.filter(x=>x.c==='board');
+      if(cs.length<4&&bs.length<4){toast('Лицо не найдено. Добавьте света и повторите.',1);return}
+      const base=med((cs.length>=4?cs:bs).map(x=>x.p));add.forEach(x=>{x.p=+(x.p-base).toFixed(3);x.w=1});
+      const mean=(c,k)=>{const a=add.filter(x=>x.c===c);return a.length?a.reduce((q,x)=>q+x[k],0)/a.length:null};let msg='';
+      if(cs.length>=4&&bs.length>=4&&Math.hypot((mean('camera','y')-mean('board','y'))*1.2,(mean('camera','p')-mean('board','p'))*2.5)<.12){for(let i=add.length-1;i>=0;i--)if(add[i].c==='camera')add.splice(i,1);msg=' Взгляд «в камеру» с этого места не отличить от «на доску»: этот класс пропущен.'}
+      ROOM.samples=[...ROOM.samples,...add].slice(-600);await save();toast('Обучено: +'+add.length+' образцов, всего '+ROOM.samples.length+'.'+msg);m.close()}
     finally{CAM.paused=false}})}
 /* ---- что делает человек: поза головы + тело + предметы ---- */
 function classify(t,e,W,H){
@@ -343,12 +348,12 @@ function classify(t,e,W,H){
   if(angle>60||drop<.1||(f&&delta>.28))s='lying';
   else if(phone&&(delta>.06||wrist||!f))s='phone';
   else if(standing)s=(t.cx>CFG.zx0&&t.cx<CFG.zx1)?'board':'standing';
-  else if(f&&(g=gazeLabel(yaw,pr,t.cx)))s=g==='board'?'front':g;
+  else if(f&&(g=gazeLabel(yaw,delta,t.cx)))s=g==='board'?'front':g;
   else if(f&&Math.abs(yaw)>CFG.yawAway)s='away';
   else if(f?delta>CFG.pitchDown:drop<.45)s='notebook';
   else if(has('laptop')||has('tv'))s=(!f||delta>-.08)?'screen':'front';
   else if(f||lm)s='front';
-  if(s==='front'&&f&&Math.abs(yaw)<.25)t.pb+=.03*delta;
+  if(f&&(t.n<30||(s==='front'&&Math.abs(yaw)<.25)))t.pb+=(t.n<30?.15:.03)*delta;
   if(t.geo&&s&&!['standing','board','lying'].includes(s)){t.sy0+=.02*(t.geo.sy-t.sy0);t.sw0+=.02*(t.geo.sw-t.sw0)}
   return s}
 function setState(t,raw,now){
